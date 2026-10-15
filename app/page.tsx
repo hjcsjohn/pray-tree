@@ -1,435 +1,173 @@
-```tsx
-'use client';
+"use client";
 
-import { FormEvent, useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { supabaseBrowser, supabaseReady } from "../lib/supabase";
 
-type Student = {
-  id: string;
-  full_name: string;
-  emoji?: string | null;
-};
+type Teacher = { id: string; full_name: string; role: "admin" | "teacher" };
+type Student = { id: string; teacher_id: string; full_name: string; grade: string; emoji: string };
+type Prayer = { id: string; student_id: string; title: string; body: string; created_at: string; status: string };
+type ResponseRow = { id: string; prayer_id: string; body: string; response_date: string; created_at: string };
+type PrayerDay = { id: string; student_id: string; prayer_date: string };
 
-type Prayer = {
-  id: string;
-  student_id: string;
-  title: string;
-  body?: string | null;
-  status: string;
-};
+const dateToday = () => new Date().toLocaleDateString("en-CA");
+const treeFor = (prayers: number, responses: number) => responses >= 3 ? "🍎🌳" : prayers >= 5 ? "🌸" : prayers >= 3 ? "🌳" : prayers >= 1 ? "🌱" : "🌰";
 
 export default function Home() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [userId, setUserId] = useState<string | null>(null);
+  const ready = supabaseReady();
+  const [client] = useState(() => ready ? supabaseBrowser() : null);
+  const [session, setSession] = useState<any>(null);
+  const [profile, setProfile] = useState<Teacher | null>(null);
+  const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [prayers, setPrayers] = useState<Prayer[]>([]);
-  const [studentName, setStudentName] = useState('');
-  const [selected, setSelected] = useState('');
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [message, setMessage] = useState('');
+  const [responses, setResponses] = useState<ResponseRow[]>([]);
+  const [days, setDays] = useState<PrayerDay[]>([]);
+  const [selectedTeacher, setSelectedTeacher] = useState<string>("");
+  const [selectedStudent, setSelectedStudent] = useState<string>("");
+  const [tab, setTab] = useState<"prayers"|"responses"|"days">("prayers");
   const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [invitePassword, setInvitePassword] = useState("");
+  const [showInvite, setShowInvite] = useState(false);
+  const [studentName, setStudentName] = useState("");
+  const [grade, setGrade] = useState("초등 3학년");
+  const [prayerTitle, setPrayerTitle] = useState("");
+  const [prayerBody, setPrayerBody] = useState("");
+  const [responsePrayer, setResponsePrayer] = useState("");
+  const [responseBody, setResponseBody] = useState("");
+  const [responseDate, setResponseDate] = useState(dateToday());
 
-  // Supabase 클라이언트를 지역 변수에 보관해
-  // 비동기 콜백에서도 null이 아님을 보장합니다.
-  useEffect(() => {
-    const client = supabase;
-
-    if (!client) {
-      return;
-    }
-
-    client.auth.getSession().then(({ data, error }) => {
-      if (error) {
-        setMessage(error.message);
-        return;
-      }
-
-      setUserId(data.session?.user.id ?? null);
-    });
-
-    const { data } = client.auth.onAuthStateChange((_event, session) => {
-      setUserId(session?.user.id ?? null);
-    });
-
-    return () => {
-      data.subscription.unsubscribe();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (userId) {
-      void load();
-    } else {
-      setStudents([]);
-      setPrayers([]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
-
-  async function load() {
-    const client = supabase;
-
-    if (!client || !userId) {
-      return;
-    }
-
-    const [studentsResult, prayersResult] = await Promise.all([
-      client
-        .from('students')
-        .select('id, full_name, emoji')
-        .order('created_at', { ascending: false }),
-      client
-        .from('prayer_requests')
-        .select('id, student_id, title, body, status')
-        .order('created_at', { ascending: false }),
+  async function loadAll(userId?: string) {
+    if (!client) return;
+    const { data: p, error: pe } = await client.from("profiles").select("id,full_name,role").order("full_name");
+    if (pe) { setMessage(pe.message); return; }
+    const profileRows = (p || []) as Teacher[];
+    setTeachers(profileRows);
+    const me = profileRows.find(x => x.id === userId) || null;
+    setProfile(me);
+    const [{ data: ss, error: se }, { data: pp, error: pre }, { data: rr, error: re }, { data: dd, error: de }] = await Promise.all([
+      client.from("students").select("*").order("full_name"),
+      client.from("prayer_requests").select("*").order("created_at", { ascending: false }),
+      client.from("prayer_responses").select("*").order("response_date", { ascending: false }),
+      client.from("prayer_days").select("*").order("prayer_date", { ascending: false })
     ]);
-
-    if (studentsResult.error) {
-      setMessage(studentsResult.error.message);
-    } else {
-      const loadedStudents = (studentsResult.data ?? []) as Student[];
-      setStudents(loadedStudents);
-
-      setSelected((current) => {
-        if (
-          current &&
-          loadedStudents.some((student) => student.id === current)
-        ) {
-          return current;
-        }
-
-        return loadedStudents[0]?.id ?? '';
-      });
-    }
-
-    if (prayersResult.error) {
-      setMessage(prayersResult.error.message);
-    } else {
-      setPrayers((prayersResult.data ?? []) as Prayer[]);
-    }
+    const err = se || pre || re || de;
+    if (err) { setMessage(err.message); return; }
+    setStudents((ss || []) as Student[]);
+    setPrayers((pp || []) as Prayer[]);
+    setResponses((rr || []) as ResponseRow[]);
+    setDays((dd || []) as PrayerDay[]);
+    if (me?.role === "admin") setSelectedTeacher(current => current || profileRows.find(x => x.role === "teacher")?.id || me.id);
+    else if (me) setSelectedTeacher(me.id);
   }
 
-  async function login(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const client = supabase;
-
-    if (!client) {
-      setMessage('Supabase 환경변수를 확인해 주세요.');
-      return;
-    }
-
-    setBusy(true);
-
-    try {
-      const { error } = await client.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      setMessage(error ? error.message : '로그인했습니다.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function signup() {
-    const client = supabase;
-
-    if (!client) {
-      setMessage('Supabase 환경변수를 확인해 주세요.');
-      return;
-    }
-
-    if (!email.trim() || password.length < 6) {
-      setMessage('이메일을 입력하고 비밀번호를 6자 이상 입력해 주세요.');
-      return;
-    }
-
-    setBusy(true);
-
-    try {
-      const { error } = await client.auth.signUp({
-        email,
-        password,
-      });
-
-      setMessage(
-        error
-          ? error.message
-          : '가입 요청을 보냈습니다. 이메일 확인이 필요할 수 있습니다.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function addStudent(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const client = supabase;
-
-    if (!client || !userId || !studentName.trim()) {
-      return;
-    }
-
-    const { error } = await client.from('students').insert({
-      full_name: studentName.trim(),
-      emoji: '🌱',
-      teacher_id: userId,
+  useEffect(() => {
+    if (!client) return;
+    client.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      if (data.session?.user) loadAll(data.session.user.id);
     });
-
-    setMessage(error ? error.message : '학생을 추가했습니다.');
-
-    if (!error) {
-      setStudentName('');
-      await load();
-    }
-  }
-
-  async function addPrayer(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const client = supabase;
-
-    if (!client || !userId || !selected || !title.trim()) {
-      return;
-    }
-
-    const { error } = await client.from('prayer_requests').insert({
-      student_id: selected,
-      title: title.trim(),
-      body: body.trim(),
-      status: '진행 중',
-      created_by: userId,
+    const { data: listener } = client.auth.onAuthStateChange((_event, next) => {
+      setSession(next);
+      if (next?.user) setTimeout(() => loadAll(next.user.id), 0);
+      else { setProfile(null); setTeachers([]); setStudents([]); setPrayers([]); setResponses([]); setDays([]); }
     });
+    return () => listener.subscription.unsubscribe();
+  }, [client]);
 
-    setMessage(error ? error.message : '기도 제목을 기록했습니다.');
+  const visibleStudents = useMemo(() => students.filter(s => profile?.role === "admin" ? s.teacher_id === selectedTeacher : s.teacher_id === profile?.id), [students, profile, selectedTeacher]);
+  const student = students.find(s => s.id === selectedStudent);
+  const studentPrayers = prayers.filter(p => p.student_id === selectedStudent);
+  const studentResponses = responses.filter(r => studentPrayers.some(p => p.id === r.prayer_id));
+  const studentDays = days.filter(d => d.student_id === selectedStudent);
+  const totalResponses = responses.length;
 
-    if (!error) {
-      setTitle('');
-      setBody('');
-      await load();
-    }
+  async function signIn(e: FormEvent) {
+    e.preventDefault(); if (!client) return;
+    setBusy(true); setMessage("");
+    const { error } = await client.auth.signInWithPassword({ email: loginEmail, password: loginPassword });
+    setBusy(false); setMessage(error ? error.message : "로그인되었습니다.");
+  }
+  async function signOut() { if (client) await client.auth.signOut(); setSelectedStudent(""); setMessage("로그아웃되었습니다."); }
+  async function createTeacher(e: FormEvent) {
+    e.preventDefault(); if (!client || profile?.role !== "admin") return;
+    setBusy(true); setMessage("");
+    // Admin-created accounts must be provisioned by Supabase Auth invitation or an Edge Function.
+    // Never place a service-role key in this browser app.
+    const { data, error } = await client.auth.signUp({ email: inviteEmail, password: invitePassword, options: { data: { full_name: inviteName, role: "teacher" } } });
+    setBusy(false);
+    if (error) setMessage(error.message);
+    else { setMessage(data.session ? "계정이 생성되었습니다. 이메일 인증 설정을 확인해 주세요." : "가입 요청이 전송되었습니다. 이메일 인증 후 관리자에게 계정 등록을 요청하세요."); setShowInvite(false); }
+  }
+  async function addStudent(e: FormEvent) {
+    e.preventDefault(); if (!client || !profile) return;
+    const teacherId = profile.role === "admin" ? selectedTeacher : profile.id;
+    if (!teacherId) { setMessage("담당 교사를 선택해 주세요."); return; }
+    setBusy(true);
+    const { error } = await client.from("students").insert({ full_name: studentName.trim(), grade, teacher_id: teacherId });
+    setBusy(false); if (error) setMessage(error.message); else { setStudentName(""); setMessage("학생을 추가했습니다."); await loadAll(session.user.id); }
+  }
+  async function addPrayer(e: FormEvent) {
+    e.preventDefault(); if (!client || !selectedStudent) return;
+    setBusy(true);
+    const { error } = await client.from("prayer_requests").insert({ student_id: selectedStudent, title: prayerTitle.trim(), body: prayerBody.trim(), created_by: session.user.id });
+    setBusy(false); if (error) setMessage(error.message); else { setPrayerTitle(""); setPrayerBody(""); setMessage("기도제목을 기록했습니다. 🌿"); await loadAll(session.user.id); }
+  }
+  async function addResponse(e: FormEvent) {
+    e.preventDefault(); if (!client || !responsePrayer) return;
+    setBusy(true);
+    const { error } = await client.from("prayer_responses").insert({ prayer_id: responsePrayer, body: responseBody.trim(), response_date: responseDate, created_by: session.user.id });
+    setBusy(false); if (error) setMessage(error.message); else { setResponseBody(""); setMessage("감사의 열매를 기록했습니다. 🌸"); await loadAll(session.user.id); }
+  }
+  async function logDay() {
+    if (!client || !selectedStudent) return;
+    setBusy(true);
+    const { error } = await client.from("prayer_days").upsert({ student_id: selectedStudent, prayer_date: dateToday(), created_by: session.user.id }, { onConflict: "student_id,prayer_date" });
+    setBusy(false); setMessage(error ? error.message : "오늘의 기도를 기록했어요. ⭐"); await loadAll(session.user.id);
+  }
+  async function togglePrayer(p: Prayer) {
+    if (!client) return;
+    const { error } = await client.from("prayer_requests").update({ status: p.status === "응답 완료" ? "진행 중" : "응답 완료" }).eq("id", p.id);
+    setMessage(error ? error.message : "상태를 변경했습니다."); await loadAll(session.user.id);
+  }
+  async function deletePrayer(id: string) {
+    if (!client || !confirm("이 기도제목을 삭제할까요? 연결된 응답도 삭제됩니다.")) return;
+    const { error } = await client.from("prayer_requests").delete().eq("id", id);
+    setMessage(error ? error.message : "삭제했습니다."); await loadAll(session.user.id);
   }
 
-  async function logout() {
-    const client = supabase;
+  if (!ready) return <main className="setup"><div className="brandmark">🌳</div><h1>기도나무를 연결해 주세요</h1><p>실제 로그인과 온라인 저장 기능을 사용하려면 Supabase 프로젝트 설정이 필요합니다.</p><ol><li>Supabase 프로젝트를 만들고 <code>supabase/schema.sql</code>을 SQL Editor에서 실행하세요.</li><li><code>.env.local</code> 파일에 프로젝트 URL과 anon/publishable key를 입력하세요.</li><li>관리자 계정은 SQL 안내에 따라 역할을 부여하세요.</li></ol><p>설정 안내는 ZIP 안의 README.md에 있습니다.</p></main>;
 
-    if (!client) {
-      return;
-    }
+  if (!session) return <main className="login-wrap"><div className="login-card"><div className="brandmark">🌳</div><h1>기도나무</h1><p className="muted">우리의 기도가 열매 맺어요</p><form onSubmit={signIn}><label>이메일<input type="email" required value={loginEmail} onChange={e=>setLoginEmail(e.target.value)} placeholder="teacher@church.org"/></label><label>비밀번호<input type="password" required value={loginPassword} onChange={e=>setLoginPassword(e.target.value)} placeholder="비밀번호"/></label><button className="primary" disabled={busy}>{busy?"확인 중…":"로그인"}</button></form>{message && <p className="notice">{message}</p>}<p className="fine">교회 관리자에게 계정 발급을 요청해 주세요.</p></div></main>;
 
-    const { error } = await client.auth.signOut();
-
-    if (error) {
-      setMessage(error.message);
-    }
-  }
-
-  if (!supabase) {
-    return (
-      <main className="wrap">
-        <h1>🌳 기도나무</h1>
-        <p>
-          Vercel 환경변수에 NEXT_PUBLIC_SUPABASE_URL과
-          NEXT_PUBLIC_SUPABASE_ANON_KEY를 등록해 주세요.
-        </p>
-      </main>
-    );
-  }
-
-  if (!userId) {
-    return (
-      <main className="wrap login">
-        <div className="tree">🌳</div>
-        <p className="eyebrow">GROWING TOGETHER IN PRAYER</p>
-        <h1>기도나무</h1>
-        <p>작은 기도가 모여 믿음의 나무로 자라납니다.</p>
-
-        <form onSubmit={login}>
-          <label>
-            이메일
-            <input
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              required
-            />
-          </label>
-
-          <label>
-            비밀번호
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-              minLength={6}
-            />
-          </label>
-
-          <button type="submit" disabled={busy}>
-            {busy ? '처리 중...' : '로그인'}
-          </button>
-
-          <button
-            type="button"
-            className="secondary"
-            onClick={signup}
-            disabled={busy}
-          >
-            새 계정 만들기
-          </button>
-        </form>
-
-        {message && <p className="message">{message}</p>}
-      </main>
-    );
-  }
-
-  const activePrayerCount = prayers.filter(
-    (prayer) => prayer.status !== '응답 완료',
-  ).length;
-
-  const answeredPrayerCount = prayers.filter(
-    (prayer) => prayer.status === '응답 완료',
-  ).length;
-
-  return (
-    <main className="wrap">
-      <header>
-        <div className="brand">
-          🌳 <span>기도나무<small>PRAY TREE</small></span>
-        </div>
-        <button className="secondary" onClick={logout}>
-          로그아웃
-        </button>
-      </header>
-
-      <section className="hero">
-        <p className="eyebrow">OUR PRAYER GARDEN</p>
-        <h1>함께 기도하며 자라나요</h1>
-        <p>한 사람의 이름을 기억하고, 작은 기도를 매일 쌓아가요.</p>
-
-        <div className="garden">
-          <span>☀️</span>
-          <strong>🌳</strong>
-          <div>
-            🌱 학생 {students.length}명　🙏 진행 중 {activePrayerCount}개　
-            ✨ 응답 {answeredPrayerCount}개
-          </div>
-        </div>
+  return <main className="app-shell">
+    <header className="app-header"><div className="brandline"><div className="brandmark smallmark">🌳</div><div><h1>기도나무</h1><p>우리의 기도가 열매 맺어요</p></div></div><div className="header-right"><span className="user-pill">{profile?.role==="admin"?"🛡️ 관리자":"🌱 교사"} · {profile?.full_name || session.user.email}</span><button className="outline" onClick={signOut}>로그아웃</button></div></header>
+    <section className="hero"><div><h2>작은 기도가 모여, 큰 사랑이 자라나요 🌱</h2><p>아이들을 위한 기도와 응답을 기록하고, 학생마다 자라나는 기도나무를 함께 돌봐요.</p></div><div className="hero-art">🌼🕊️🌿</div></section>
+    <section className="stats"><div><span>🧒</span><strong>{students.length}</strong><small>학생</small></div><div><span>🌿</span><strong>{prayers.length}</strong><small>기도제목</small></div><div><span>🌸</span><strong>{totalResponses}</strong><small>기도응답</small></div><div><span>⭐</span><strong>{days.length}</strong><small>기도 기록</small></div></section>
+    {message && <div className="notice" role="status">{message}<button onClick={()=>setMessage("")}>닫기</button></div>}
+    <div className="workspace">
+      <aside className="sidebar"><div className="section-title"><h3>👩‍🏫 {profile?.role==="admin"?"교사 목록":"내 담당 학생"}</h3></div>
+      {profile?.role==="admin" ? <div className="teacher-list">{teachers.filter(t=>t.role==="teacher").map(t=><button className={`teacher-item ${selectedTeacher===t.id?"chosen":""}`} key={t.id} onClick={()=>{setSelectedTeacher(t.id);setSelectedStudent("");}}><span className="avatar">👩🏻‍🏫</span><span><b>{t.full_name}</b><small>{students.filter(s=>s.teacher_id===t.id).length}명 · 담당 학생</small></span></button>)}</div> : <p className="helper">담당 학생을 선택해 기도 기록을 확인하세요.</p>}
+      {profile?.role==="admin" && <button className="outline full" onClick={()=>setShowInvite(!showInvite)}>＋ 교사 계정 안내</button>}
+      {showInvite && <form className="mini-form" onSubmit={createTeacher}><label>교사 이름<input required value={inviteName} onChange={e=>setInviteName(e.target.value)}/></label><label>이메일<input type="email" required value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)}/></label><label>임시 비밀번호<input type="password" minLength={8} required value={invitePassword} onChange={e=>setInvitePassword(e.target.value)}/></label><p className="fine">간단한 가입 흐름 예시입니다. 운영 배포 전에는 관리자 전용 초대 Edge Function을 권장합니다.</p><button className="primary" disabled={busy}>가입 요청</button></form>}
+      <div className="side-tip">💚 학생 정보는 담당 교사와 관리자만 볼 수 있도록 데이터베이스 권한으로 보호됩니다.</div></aside>
+      <section className="main-panel">
+        {!selectedStudent ? <>
+          <div className="section-heading"><div><h2>{profile?.role==="admin" ? (teachers.find(t=>t.id===selectedTeacher)?.full_name || "교사 선택") : "나의 학생 정원"}</h2><p>학생을 선택하면 기도제목과 성장 기록이 보여요.</p></div></div>
+          {profile?.role==="admin" && !selectedTeacher ? <div className="empty">왼쪽에서 교사를 선택해 주세요.</div> : <><form className="add-student" onSubmit={addStudent}><input required value={studentName} onChange={e=>setStudentName(e.target.value)} placeholder="새 학생 이름"/><select value={grade} onChange={e=>setGrade(e.target.value)}><option>유치부</option><option>초등 1학년</option><option>초등 2학년</option><option>초등 3학년</option><option>초등 4학년</option><option>초등 5학년</option><option>초등 6학년</option><option>중등부</option><option>고등부</option></select><button className="primary" disabled={busy}>＋ 학생 추가</button></form><div className="student-grid">{visibleStudents.map(s=>{const ps=prayers.filter(p=>p.student_id===s.id).length;const rs=responses.filter(r=>prayers.some(p=>p.id===r.prayer_id&&p.student_id===s.id)).length;return <button key={s.id} className="student-card" onClick={()=>{setSelectedStudent(s.id);setTab("prayers");}}><div className="student-head"><span className="avatar">{s.emoji||"🧒🏻"}</span><span><b>{s.full_name}</b><small>{s.grade}</small></span></div><div className="tree-art">{treeFor(ps,rs)}</div><div className="tree-caption">{rs>=3?"열매나무":ps>=5?"꽃나무":ps>=3?"어린 나무":ps?"새싹":"새 씨앗"}</div><div className="card-counts"><span>🌿 {ps} 기도</span><span>🌸 {rs} 응답</span></div></button>})}{visibleStudents.length===0&&<div className="empty">아직 학생이 없어요. 위에서 첫 학생을 추가해 주세요. 🌱</div>}</div></>}
+        </> : <><div className="detail-top"><button className="outline" onClick={()=>setSelectedStudent("")}>← 학생 목록</button><div className="detail-actions"><button className="soft" onClick={logDay}>⭐ 오늘 기도했어요</button></div></div><div className="student-banner"><div className="big-tree">{treeFor(studentPrayers.length,studentResponses.length)}</div><div className="student-intro"><h2>{student?.full_name}의 기도나무</h2><p>{student?.grade} · 기도의 잎사귀가 자라고 감사의 꽃이 피어요.</p><div className="growthbar"><span style={{width:`${Math.min(100,studentPrayers.length*12+studentResponses.length*12)}%`}}/></div><small>🌿 기도제목 {studentPrayers.length} · 🌸 응답 {studentResponses.length} · ⭐ 기도한 날 {studentDays.length}</small></div></div>
+          <div className="record-columns"><div className="records"><div className="tabs"><button className={tab==="prayers"?"active":""} onClick={()=>setTab("prayers")}>🌿 기도제목</button><button className={tab==="responses"?"active":""} onClick={()=>setTab("responses")}>🌸 응답</button><button className={tab==="days"?"active":""} onClick={()=>setTab("days")}>⭐ 기도한 날</button></div>
+            {tab==="prayers" && <><form className="prayer-form" onSubmit={addPrayer}><h3>새 기도제목 기록</h3><input required value={prayerTitle} onChange={e=>setPrayerTitle(e.target.value)} placeholder="기도제목"/><textarea value={prayerBody} onChange={e=>setPrayerBody(e.target.value)} placeholder="함께 기도할 내용을 적어 주세요."/><button className="primary" disabled={busy}>기도제목 저장</button></form><div className="record-list">{studentPrayers.map(p=><article className="record" key={p.id}><div className="record-heading"><h4>{p.title}</h4><span className={`status ${p.status==="응답 완료"?"done":""}`}>{p.status}</span></div><p>{p.body||"기도 내용이 추가되지 않았어요."}</p><small>등록일 {new Date(p.created_at).toLocaleDateString("ko-KR")}</small><div className="record-buttons"><button className="soft" onClick={()=>{setResponsePrayer(p.id);setTab("responses");}}>🌸 응답 기록</button><button className="outline" onClick={()=>togglePrayer(p)}>{p.status==="응답 완료"?"진행 중으로":"응답 완료로"}</button>{profile?.role==="admin"&&<button className="delete" onClick={()=>deletePrayer(p.id)}>삭제</button>}</div></article>)}{studentPrayers.length===0&&<div className="empty">첫 기도제목을 기록해 보세요 🌱</div>}</div></>}
+            {tab==="responses" && <><form className="prayer-form" onSubmit={addResponse}><h3>기도응답과 감사 기록</h3><label>연결된 기도제목<select required value={responsePrayer} onChange={e=>setResponsePrayer(e.target.value)}><option value="">기도제목 선택</option>{studentPrayers.map(p=><option value={p.id} key={p.id}>{p.title}</option>)}</select></label><label>응답 날짜<input type="date" required value={responseDate} onChange={e=>setResponseDate(e.target.value)}/></label><textarea required value={responseBody} onChange={e=>setResponseBody(e.target.value)} placeholder="어떤 변화와 감사가 있었나요?"/><button className="primary" disabled={busy||!studentPrayers.length}>응답 저장</button></form><div className="record-list">{studentResponses.map(r=><article className="record" key={r.id}><h4>🌸 {studentPrayers.find(p=>p.id===r.prayer_id)?.title}</h4><p>{r.body}</p><small>응답 기록일 {r.response_date}</small></article>)}{studentResponses.length===0&&<div className="empty">아직 기록된 응답이 없어요. 작은 감사도 기록해 보세요 🌷</div>}</div></>}
+            {tab==="days" && <div className="record-list">{studentDays.map(d=><article className="record" key={d.id}><h4>⭐ 함께 기도한 날</h4><p>이 날도 이 학생을 위해 기도했어요.</p><small>{d.prayer_date}</small></article>)}{studentDays.length===0&&<div className="empty">‘오늘 기도했어요’를 눌러 첫 기록을 남겨 보세요.</div>}</div>}
+          </div><aside className="growth-panel"><div className="garden">✨<div>{treeFor(studentPrayers.length,studentResponses.length)}</div>🌼</div><h3>오늘도 자라고 있어요!</h3><p>응답을 기다리는 시간에도 기도는 소중해요.</p><div className="growth-legend"><span>🌿 <b>{studentPrayers.length}</b><small>기도제목</small></span><span>🌸 <b>{studentResponses.length}</b><small>기도응답</small></span><span>⭐ <b>{studentDays.length}</b><small>기도한 날</small></span></div></aside></div>
+        </>}
       </section>
-
-      <div className="grid">
-        <section className="panel">
-          <h2>🌱 우리 반 학생</h2>
-
-          <form onSubmit={addStudent} className="inline">
-            <input
-              value={studentName}
-              onChange={(event) => setStudentName(event.target.value)}
-              placeholder="학생 이름"
-              required
-            />
-            <button type="submit">추가</button>
-          </form>
-
-          {students.map((student) => (
-            <div className="item" key={student.id}>
-              🌱　{student.full_name}
-            </div>
-          ))}
-
-          {!students.length && (
-            <p className="empty">첫 학생을 등록해 주세요.</p>
-          )}
-        </section>
-
-        <section className="panel">
-          <h2>🙏 기도 제목 심기</h2>
-
-          <form onSubmit={addPrayer}>
-            <label>
-              학생
-              <select
-                value={selected}
-                onChange={(event) => setSelected(event.target.value)}
-                required
-              >
-                <option value="">학생 선택</option>
-                {students.map((student) => (
-                  <option key={student.id} value={student.id}>
-                    {student.full_name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              기도 제목
-              <input
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder="가족의 건강을 위해"
-                required
-              />
-            </label>
-
-            <label>
-              내용
-              <textarea
-                value={body}
-                onChange={(event) => setBody(event.target.value)}
-                rows={3}
-              />
-            </label>
-
-            <button type="submit" disabled={!students.length}>
-              기도 제목 기록하기
-            </button>
-          </form>
-        </section>
-      </div>
-
-      <section className="panel">
-        <h2>🌼 기도 제목 목록</h2>
-
-        {prayers.map((prayer) => (
-          <article className="prayer" key={prayer.id}>
-            <b>{prayer.title}</b>
-
-            <span
-              className={
-                prayer.status === '응답 완료' ? 'done' : 'status'
-              }
-            >
-              {prayer.status}
-            </span>
-
-            <p>
-              {students.find(
-                (student) => student.id === prayer.student_id,
-              )?.full_name ?? '학생'}
-              {prayer.body ? ` · ${prayer.body}` : ''}
-            </p>
-          </article>
-        ))}
-
-        {!prayers.length && (
-          <p className="empty">
-            첫 기도 제목을 기록하면 이곳에 표시됩니다.
-          </p>
-        )}
-      </section>
-
-      {message && <p className="message">{message}</p>}
-
-      <footer>“쉬지 말고 기도하라” · 데살로니가전서 5:17</footer>
-    </main>
-  );
+    </div>
+    <footer className="footer">🌱 기도는 작은 시작이지만, 하나님 안에서 자라는 사랑입니다.</footer>
+  </main>;
 }
-```
