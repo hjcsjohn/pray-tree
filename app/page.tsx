@@ -89,7 +89,7 @@ export default function Home() {
       if (!active) return;
       setSession(next);
       setAuthChecking(false);
-      if (event === "PASSWORD_RECOVERY") setRecoveryMode(true);
+      if (event === "PASSWORD_RECOVERY") { setRecoveryMode(true); if (next?.user) setRecoveryReady(true); }
       if (next?.user) {
         if (isRecovery) setRecoveryReady(true);
         if (lastLoadedUser !== next.user.id) {
@@ -146,7 +146,7 @@ export default function Home() {
     if (!client) return;
     setBusy(true); setMessage("");
     const { error } = await client.auth.resetPasswordForEmail(loginEmail.trim(), {
-      redirectTo: window.location.origin,
+      redirectTo: `${window.location.origin}/?reset=1`,
     });
     setBusy(false);
     setMessage(error ? error.message : "비밀번호 재설정 링크를 이메일로 보냈습니다. 메일함과 스팸함을 확인해 주세요.");
