@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { supabaseBrowser, supabaseReady } from "../lib/supabase";
+import TeacherRanking from "./TeacherRanking";
 
 type Teacher = { id: string; full_name: string; role: "admin" | "teacher" };
 type Student = { id: string; teacher_id: string; full_name: string; grade: string; emoji: string };
@@ -46,6 +47,7 @@ export default function Home() {
   const [growthSettings, setGrowthSettings] = useState<GrowthSettings>(defaultGrowthSettings);
   const [growthDraft, setGrowthDraft] = useState<GrowthSettings>(defaultGrowthSettings);
   const [showGrowthSettings, setShowGrowthSettings] = useState(false);
+  const [showRanking, setShowRanking] = useState(false);
   const [selectedTeacher, setSelectedTeacher] = useState<string>("");
   const [selectedStudent, setSelectedStudent] = useState<string>("");
   const [tab, setTab] = useState<"prayers"|"responses"|"days">("prayers");
@@ -129,6 +131,7 @@ export default function Home() {
         setProfile(null); setTeachers([]); setStudents([]);
         setPrayers([]); setResponses([]); setDays([]);
         setShowGrowthSettings(false);
+        setShowRanking(false);
       }
     };
 
@@ -275,11 +278,13 @@ export default function Home() {
   if (!session) return <main className="login-wrap"><div className="login-card"><div className="brandmark">🌳</div><h1>기도나무</h1><p className="muted">우리의 기도가 열매 맺어요</p><form onSubmit={signIn}><label>이메일<input type="email" required value={loginEmail} onChange={e=>setLoginEmail(e.target.value)} placeholder="teacher@church.org"/></label><label>비밀번호<input type="password" required value={loginPassword} onChange={e=>setLoginPassword(e.target.value)} placeholder="비밀번호"/></label><button className="primary" disabled={busy}>{busy?"확인 중…":"로그인"}</button></form><form onSubmit={requestPasswordReset} className="mini-form"><button type="submit" className="outline full" disabled={busy || !loginEmail.trim()}>비밀번호를 잊으셨나요? 재설정 이메일 받기</button><p className="fine">위 이메일 칸에 계정 이메일을 먼저 입력해 주세요.</p></form>{message && <p className="notice" role="status">{message}</p>}<p className="fine">연결 진단 2026-10-18: {process.env.NEXT_PUBLIC_PRAYER_TREE_KEY?.startsWith("sb_publishable_") ? "새 공개키" : "이전/미설정 키"} · 끝 6자리 {process.env.NEXT_PUBLIC_PRAYER_TREE_KEY?.slice(-6) || "없음"}</p><p className="fine">교회 관리자에게 계정 발급을 요청해 주세요.</p></div></main>;
 
   return <main className="app-shell">
-    <header className="app-header"><div className="brandline"><div className="brandmark smallmark">🌳</div><div><h1>기도나무</h1><p>우리의 기도가 열매 맺어요</p></div></div><div className="header-right"><span className="user-pill">{profile?.role==="admin"?"🛡️ 관리자":"🌱 교사"} · {profile?.full_name || session.user.email}</span>{profile?.role==="admin" && <button type="button" className="outline" onClick={()=>{ setShowGrowthSettings(current=>!current); setGrowthDraft(growthSettings); setMessage(""); }}>{showGrowthSettings?"← 학생 관리":"⚙️ 나무 성장 설정"}</button>}<button className="outline" onClick={signOut}>로그아웃</button></div></header>
+    <header className="app-header"><div className="brandline"><div className="brandmark smallmark">🌳</div><div><h1>기도나무</h1><p>우리의 기도가 열매 맺어요</p></div></div><div className="header-right"><span className="user-pill">{profile?.role==="admin"?"🛡️ 관리자":"🌱 교사"} · {profile?.full_name || session.user.email}</span>{profile?.role==="admin" && <button type="button" className="outline" onClick={()=>{ setShowRanking(false); setShowGrowthSettings(current=>!current); setGrowthDraft(growthSettings); setMessage(""); }}>{showGrowthSettings?"← 학생 관리":"⚙️ 나무 성장 설정"}</button>}{profile?.role==="admin" && <button type="button" className="outline" onClick={()=>{ setShowGrowthSettings(false); setShowRanking(current=>!current); setMessage(""); }}>{showRanking?"← 학생 관리":"🏆 교사 랭킹"}</button>}<button className="outline" onClick={signOut}>로그아웃</button></div></header>
     <section className="hero"><div><h2>작은 기도가 모여, 큰 사랑이 자라나요 🌱</h2><p>아이들을 위한 기도와 응답을 기록하고, 학생마다 자라나는 기도나무를 함께 돌봐요.</p></div><div className="hero-art">🌼🕊️🌿</div></section>
     <section className="stats"><div><span>🧒</span><strong>{students.length}</strong><small>학생</small></div><div><span>🌿</span><strong>{prayers.length}</strong><small>기도제목</small></div><div><span>🌸</span><strong>{totalResponses}</strong><small>기도응답</small></div><div><span>⭐</span><strong>{days.length}</strong><small>기도 기록</small></div></section>
     {message && <div className="notice" role="status">{message}<button onClick={()=>setMessage("")}>닫기</button></div>}
-    {showGrowthSettings && profile?.role === "admin" ? (
+    {showRanking && profile?.role === "admin" ? (
+      <TeacherRanking client={client!} teachers={teachers} onBack={() => setShowRanking(false)} />
+    ) : showGrowthSettings && profile?.role === "admin" ? (
       <section className="growth-config-page">
         <div className="growth-config-heading">
           <div><h2>⚙️ 기도나무 성장 설정</h2><p>교회 전체에 적용할 나무의 성장 기준을 정할 수 있어요. 관리자만 수정할 수 있습니다.</p></div>
