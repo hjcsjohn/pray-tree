@@ -1,6 +1,10 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+// This dedicated Prayer Tree site must always authenticate against its own
+// Supabase project. The URL is a public project endpoint, not a secret.
+// Pinning it here avoids an old NEXT_PUBLIC_SUPABASE_URL getting baked into
+// a cached browser bundle during deployments.
+const url = "https://ovpupevdhtjbtsiynmku.supabase.co";
 const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 // One browser client for the entire application. Multiple clients can race
