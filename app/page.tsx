@@ -29,6 +29,9 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
+  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [inviteName, setInviteName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [invitePassword, setInvitePassword] = useState("");
@@ -71,7 +74,8 @@ export default function Home() {
       setSession(data.session);
       if (data.session?.user) loadAll(data.session.user.id);
     });
-    const { data: listener } = client.auth.onAuthStateChange((_event, next) => {
+    const { data: listener } = client.auth.onAuthStateChange((event, next) => {
+      if (event === "PASSWORD_RECOVERY") setRecoveryMode(true);
       setSession(next);
       if (next?.user) setTimeout(() => loadAll(next.user.id), 0);
       else { setProfile(null); setTeachers([]); setStudents([]); setPrayers([]); setResponses([]); setDays([]); }
@@ -91,6 +95,28 @@ export default function Home() {
     setBusy(true); setMessage("");
     const { error } = await client.auth.signInWithPassword({ email: loginEmail, password: loginPassword });
     setBusy(false); setMessage(error ? error.message : "로그인되었습니다.");
+  }
+  async function requestPasswordReset(e: FormEvent) {
+    e.preventDefault();
+    if (!client) return;
+    setBusy(true); setMessage("");
+    const { error } = await client.auth.resetPasswordForEmail(loginEmail.trim(), {
+      redirectTo: window.location.origin,
+    });
+    setBusy(false);
+    setMessage(error ? error.message : "비밀번호 재설정 링크를 이메일로 보냈습니다. 메일함과 스팸함을 확인해 주세요.");
+  }
+  async function saveNewPassword(e: FormEvent) {
+    e.preventDefault();
+    if (!client) return;
+    if (newPassword.length < 8) { setMessage("비밀번호는 8자 이상 입력해 주세요."); return; }
+    if (newPassword !== confirmPassword) { setMessage("새 비밀번호가 서로 일치하지 않습니다."); return; }
+    setBusy(true); setMessage("");
+    const { error } = await client.auth.updateUser({ password: newPassword });
+    setBusy(false);
+    if (error) { setMessage(error.message); return; }
+    setRecoveryMode(false); setNewPassword(""); setConfirmPassword("");
+    setMessage("비밀번호가 변경되었습니다. 기존 계정으로 계속 이용하실 수 있습니다.");
   }
   async function signOut() { if (client) await client.auth.signOut(); setSelectedStudent(""); setMessage("로그아웃되었습니다."); }
   async function createTeacher(e: FormEvent) {
@@ -142,7 +168,9 @@ export default function Home() {
 
   if (!ready) return <main className="setup"><div className="brandmark">🌳</div><h1>기도나무를 연결해 주세요</h1><p>실제 로그인과 온라인 저장 기능을 사용하려면 Supabase 프로젝트 설정이 필요합니다.</p><ol><li>Supabase 프로젝트를 만들고 <code>supabase/schema.sql</code>을 SQL Editor에서 실행하세요.</li><li><code>.env.local</code> 파일에 프로젝트 URL과 anon/publishable key를 입력하세요.</li><li>관리자 계정은 SQL 안내에 따라 역할을 부여하세요.</li></ol><p>설정 안내는 ZIP 안의 README.md에 있습니다.</p></main>;
 
-  if (!session) return <main className="login-wrap"><div className="login-card"><div className="brandmark">🌳</div><h1>기도나무</h1><p className="muted">우리의 기도가 열매 맺어요</p><form onSubmit={signIn}><label>이메일<input type="email" required value={loginEmail} onChange={e=>setLoginEmail(e.target.value)} placeholder="teacher@church.org"/></label><label>비밀번호<input type="password" required value={loginPassword} onChange={e=>setLoginPassword(e.target.value)} placeholder="비밀번호"/></label><button className="primary" disabled={busy}>{busy?"확인 중…":"로그인"}</button></form>{message && <p className="notice">{message}</p>}<p className="fine">교회 관리자에게 계정 발급을 요청해 주세요.</p></div></main>;
+  if (recoveryMode) return <main className="login-wrap"><div className="login-card"><div className="brandmark">🌳</div><h1>새 비밀번호 설정</h1><p className="muted">새 비밀번호를 입력해 주세요.</p><form onSubmit={saveNewPassword}><label>새 비밀번호<input type="password" required minLength={8} autoComplete="new-password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="8자 이상"/></label><label>새 비밀번호 확인<input type="password" required minLength={8} autoComplete="new-password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="비밀번호 다시 입력"/></label><button className="primary" disabled={busy}>{busy?"변경 중…":"비밀번호 변경"}</button></form>{message && <p className="notice" role="status">{message}</p>}</div></main>;
+
+  if (!session) return <main className="login-wrap"><div className="login-card"><div className="brandmark">🌳</div><h1>기도나무</h1><p className="muted">우리의 기도가 열매 맺어요</p><form onSubmit={signIn}><label>이메일<input type="email" required value={loginEmail} onChange={e=>setLoginEmail(e.target.value)} placeholder="teacher@church.org"/></label><label>비밀번호<input type="password" required value={loginPassword} onChange={e=>setLoginPassword(e.target.value)} placeholder="비밀번호"/></label><button className="primary" disabled={busy}>{busy?"확인 중…":"로그인"}</button></form><form onSubmit={requestPasswordReset} className="mini-form"><button type="submit" className="outline full" disabled={busy || !loginEmail.trim()}>비밀번호를 잊으셨나요? 재설정 이메일 받기</button><p className="fine">위 이메일 칸에 계정 이메일을 먼저 입력해 주세요.</p></form>{message && <p className="notice" role="status">{message}</p>}<p className="fine">교회 관리자에게 계정 발급을 요청해 주세요.</p></div></main>;
 
   return <main className="app-shell">
     <header className="app-header"><div className="brandline"><div className="brandmark smallmark">🌳</div><div><h1>기도나무</h1><p>우리의 기도가 열매 맺어요</p></div></div><div className="header-right"><span className="user-pill">{profile?.role==="admin"?"🛡️ 관리자":"🌱 교사"} · {profile?.full_name || session.user.email}</span><button className="outline" onClick={signOut}>로그아웃</button></div></header>
