@@ -188,7 +188,7 @@ export default function Home() {
   async function addPrayer(e: FormEvent) {
     e.preventDefault(); if (!client || !selectedStudent) return;
     setBusy(true);
-    const { error } = await client.from("prayer_requests").insert({ student_id: selectedStudent, title: prayerTitle.trim(), body: prayerBody.trim(), created_by: session.user.id });
+    const { error } = await client.from("prayer_requests").insert({ student_id: selectedStudent, title: prayerTitle.trim(), body: prayerBody.trim(), status: "진행 중", created_by: session.user.id });
     setBusy(false); if (error) setMessage(error.message); else { setPrayerTitle(""); setPrayerBody(""); setMessage("기도제목을 기록했습니다. 🌿"); await loadAll(session.user.id); }
   }
   async function addResponse(e: FormEvent) {
