@@ -80,6 +80,16 @@ export default function Home() {
       if (next?.user) setTimeout(() => loadAll(next.user.id), 0);
       else { setProfile(null); setTeachers([]); setStudents([]); setPrayers([]); setResponses([]); setDays([]); }
     });
+    // Supabase may process the recovery URL before React subscribes to PASSWORD_RECOVERY.
+    // Detect the recovery marker in the URL as a fallback so the password form still appears.
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const queryParams = new URLSearchParams(window.location.search);
+    if (hashParams.get("type") === "recovery" || queryParams.get("type") === "recovery" || queryParams.get("reset") === "1") {
+      setRecoveryMode(true);
+      client.auth.getSession().then(({ data }) => {
+        if (!data.session) setMessage("재설정 링크를 확인할 수 없습니다. 이메일의 링크가 만료되었을 수 있습니다. 새 재설정 이메일을 요청해 주세요.");
+      });
+    }
     return () => listener.subscription.unsubscribe();
   }, [client]);
 
