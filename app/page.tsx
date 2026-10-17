@@ -11,6 +11,14 @@ type ResponseRow = { id: string; prayer_id: string; body: string; response_date:
 type PrayerDay = { id: string; student_id: string; prayer_date: string };
 
 const dateToday = () => new Date().toLocaleDateString("en-CA");
+const gradeOptions = [
+  "유치부",
+  "초등 1학년", "초등 2학년", "초등 3학년",
+  "초등 4학년", "초등 5학년", "초등 6학년",
+  "중등부 1학년", "중등부 2학년", "중등부 3학년",
+  "고등부 1학년", "고등부 2학년", "고등부 3학년"
+] as const;
+
 type GrowthSettings = {
   sprout_min: number;
   tree_min: number;
@@ -65,6 +73,12 @@ export default function Home() {
   const [showInvite, setShowInvite] = useState(false);
   const [studentName, setStudentName] = useState("");
   const [grade, setGrade] = useState("초등 3학년");
+  const [editingStudent, setEditingStudent] = useState(false);
+  const [editStudentName, setEditStudentName] = useState("");
+  const [editStudentGrade, setEditStudentGrade] = useState("");
+  const [editStudentTeacher, setEditStudentTeacher] = useState("");
+  const [deletingStudent, setDeletingStudent] = useState(false);
+  const [deleteStudentName, setDeleteStudentName] = useState("");
   const [prayerTitle, setPrayerTitle] = useState("");
   const [prayerBody, setPrayerBody] = useState("");
   const [responsePrayer, setResponsePrayer] = useState("");
@@ -132,6 +146,7 @@ export default function Home() {
         setPrayers([]); setResponses([]); setDays([]);
         setShowGrowthSettings(false);
         setShowRanking(false);
+        setEditingStudent(false); setDeletingStudent(false); setDeleteStudentName("");
       }
     };
 
@@ -240,6 +255,98 @@ export default function Home() {
     const { error } = await client.from("students").insert({ full_name: studentName.trim(), grade, teacher_id: teacherId });
     setBusy(false); if (error) setMessage(error.message); else { setStudentName(""); setMessage("학생을 추가했습니다."); await loadAll(session.user.id); }
   }
+  function openStudent(studentId: string) {
+    setSelectedStudent(studentId);
+    setTab("prayers");
+    setEditingStudent(false);
+    setDeletingStudent(false);
+    setDeleteStudentName("");
+    setMessage("");
+  }
+  function closeStudent() {
+    setSelectedStudent("");
+    setEditingStudent(false);
+    setDeletingStudent(false);
+    setDeleteStudentName("");
+    setMessage("");
+  }
+  function beginEditStudent(current: Student) {
+    setEditingStudent(true);
+    setDeletingStudent(false);
+    setDeleteStudentName("");
+    setEditStudentName(current.full_name);
+    setEditStudentGrade(current.grade);
+    setEditStudentTeacher(current.teacher_id);
+    setMessage("");
+  }
+  function beginDeleteStudent() {
+    if (profile?.role !== "admin") return;
+    setDeletingStudent(true);
+    setEditingStudent(false);
+    setDeleteStudentName("");
+    setMessage("");
+  }
+  async function saveStudent(e: FormEvent) {
+    e.preventDefault();
+    if (!client || !session || !student) return;
+    const nextName = editStudentName.trim();
+    const nextGrade = editStudentGrade.trim();
+    if (!nextName || !nextGrade) {
+      setMessage("학생 이름과 학년을 확인해 주세요.");
+      return;
+    }
+    if (profile?.role === "admin" && !teachers.some(t => t.id === editStudentTeacher)) {
+      setMessage("등록된 담당 교사를 선택해 주세요.");
+      return;
+    }
+    const nextData = profile?.role === "admin"
+      ? { full_name: nextName, grade: nextGrade, teacher_id: editStudentTeacher }
+      : { full_name: nextName, grade: nextGrade };
+    setBusy(true);
+    setMessage("");
+    const { data, error } = await client.from("students")
+      .update(nextData)
+      .eq("id", student.id)
+      .select("id,full_name,grade,teacher_id")
+      .single();
+    setBusy(false);
+    if (error || !data) {
+      setMessage("학생 정보 수정 실패: " + (error?.message || "변경할 학생을 확인하지 못했습니다."));
+      return;
+    }
+    setEditingStudent(false);
+    if (profile?.role === "admin") setSelectedTeacher(data.teacher_id);
+    await loadAll(session.user.id);
+    setMessage("학생 정보를 수정했습니다. ✅");
+  }
+  async function deleteStudent() {
+    if (!client || !session || !student || profile?.role !== "admin") return;
+    if (deleteStudentName !== student.full_name) {
+      setMessage("삭제하려면 학생 이름을 정확히 입력해 주세요.");
+      return;
+    }
+    // The database cascades student deletion to prayers, answers, and prayer-day records.
+    // Never delete data without a second, explicit confirmation.
+    if (!window.confirm(`정말로 "${student.full_name}" 학생과 모든 연결된 기도 기록을 영구 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) return;
+    setBusy(true);
+    setMessage("");
+    const { data, error } = await client.from("students")
+      .delete()
+      .eq("id", student.id)
+      .select("id");
+    setBusy(false);
+    if (error || !data || data.length !== 1) {
+      setMessage("학생 삭제 실패: " + (error?.message || "삭제 대상이 확인되지 않았습니다. 로그인 권한을 확인해 주세요."));
+      return;
+    }
+    setSelectedStudent("");
+    setDeletingStudent(false);
+    setEditingStudent(false);
+    setDeleteStudentName("");
+    await loadAll(session.user.id);
+    setMessage("학생과 연결된 기도 기록을 삭제했습니다.");
+  }
+
   async function addPrayer(e: FormEvent) {
     e.preventDefault(); if (!client || !selectedStudent) return;
     setBusy(true);
@@ -328,8 +435,29 @@ export default function Home() {
       <section className="main-panel">
         {!selectedStudent ? <>
           <div className="section-heading"><div><h2>{profile?.role==="admin" ? (teachers.find(t=>t.id===selectedTeacher)?.full_name || "교사 선택") : "나의 학생 정원"}</h2><p>학생을 선택하면 기도제목과 성장 기록이 보여요.</p></div></div>
-          {profile?.role==="admin" && !selectedTeacher ? <div className="empty">왼쪽에서 교사를 선택해 주세요.</div> : <><form className="add-student" onSubmit={addStudent}><input required value={studentName} onChange={e=>setStudentName(e.target.value)} placeholder="새 학생 이름"/><select value={grade} onChange={e=>setGrade(e.target.value)}><option>유치부</option><option>초등 1학년</option><option>초등 2학년</option><option>초등 3학년</option><option>초등 4학년</option><option>초등 5학년</option><option>초등 6학년</option><option>중등부</option><option>고등부</option></select><button className="primary" disabled={busy}>＋ 학생 추가</button></form><div className="student-grid">{visibleStudents.map(s=>{const ps=prayers.filter(p=>p.student_id===s.id).length;const rs=responses.filter(r=>prayers.some(p=>p.id===r.prayer_id&&p.student_id===s.id)).length;return <button key={s.id} className="student-card" onClick={()=>{setSelectedStudent(s.id);setTab("prayers");}}><div className="student-head"><span className="avatar">{s.emoji||"🧒🏻"}</span><span><b>{s.full_name}</b><small>{s.grade}</small></span></div><div className="tree-art">{treeFor(ps,rs,growthSettings)}</div><div className="tree-caption">{treeLabel(ps,rs,growthSettings)}</div><div className="card-counts"><span>🌿 {ps} 기도</span><span>🌸 {rs} 응답</span></div></button>})}{visibleStudents.length===0&&<div className="empty">아직 학생이 없어요. 위에서 첫 학생을 추가해 주세요. 🌱</div>}</div></>}
-        </> : <><div className="detail-top"><button className="outline" onClick={()=>setSelectedStudent("")}>← 학생 목록</button><div className="detail-actions"><button className="soft" onClick={logDay}>⭐ 오늘 기도했어요</button></div></div><div className="student-banner"><div className="big-tree">{treeFor(studentPrayers.length,studentResponses.length,growthSettings)}</div><div className="student-intro"><h2>{student?.full_name}의 기도나무</h2><p>{student?.grade} · 기도의 잎사귀가 자라고 감사의 꽃이 피어요.</p><div className="growthbar"><span style={{width:`${Math.min(100,Math.round(studentPrayers.length / growthSettings.flower_min * 100))}%`}}/></div><small>🌿 기도제목 {studentPrayers.length} · 🌸 응답 {studentResponses.length} · ⭐ 기도한 날 {studentDays.length}</small></div></div>
+          {profile?.role==="admin" && !selectedTeacher ? <div className="empty">왼쪽에서 교사를 선택해 주세요.</div> : <><form className="add-student" onSubmit={addStudent}><input required value={studentName} onChange={e=>setStudentName(e.target.value)} placeholder="새 학생 이름"/><select value={grade} onChange={e=>setGrade(e.target.value)}>{gradeOptions.map(option=><option key={option} value={option}>{option}</option>)}</select><button className="primary" disabled={busy}>＋ 학생 추가</button></form><div className="student-grid">{visibleStudents.map(s=>{const ps=prayers.filter(p=>p.student_id===s.id).length;const rs=responses.filter(r=>prayers.some(p=>p.id===r.prayer_id&&p.student_id===s.id)).length;return <button key={s.id} className="student-card" onClick={()=>openStudent(s.id)}><div className="student-head"><span className="avatar">{s.emoji||"🧒🏻"}</span><span><b>{s.full_name}</b><small>{s.grade}</small></span></div><div className="tree-art">{treeFor(ps,rs,growthSettings)}</div><div className="tree-caption">{treeLabel(ps,rs,growthSettings)}</div><div className="card-counts"><span>🌿 {ps} 기도</span><span>🌸 {rs} 응답</span></div></button>})}{visibleStudents.length===0&&<div className="empty">아직 학생이 없어요. 위에서 첫 학생을 추가해 주세요. 🌱</div>}</div></>}
+        </> : <><div className="detail-top"><button type="button" className="outline" onClick={closeStudent}>← 학생 목록</button><div className="detail-actions"><button type="button" className="outline" disabled={busy} onClick={()=>student && beginEditStudent(student)}>✏️ 학생 정보 수정</button>{profile?.role==="admin" && <button type="button" className="delete" disabled={busy} onClick={beginDeleteStudent}>🗑 학생 삭제</button>}<button type="button" className="soft" disabled={busy} onClick={logDay}>⭐ 오늘 기도했어요</button></div></div>
+          {editingStudent && student && <form className="student-manage-panel" onSubmit={saveStudent}>
+            <h3>✏️ 학생 정보 수정</h3>
+            <p>학생 이름이나 학년을 수정할 수 있습니다. 기존 기도제목과 응답 기록은 그대로 유지됩니다.</p>
+            <div className="student-edit-grid">
+              <label>학생 이름<input type="text" required maxLength={80} value={editStudentName} onChange={e=>setEditStudentName(e.target.value)} placeholder="학생 이름"/></label>
+              <label>학년<select required value={editStudentGrade} onChange={e=>setEditStudentGrade(e.target.value)}>
+                {!gradeOptions.includes(editStudentGrade as typeof gradeOptions[number]) && <option value={editStudentGrade}>{editStudentGrade || "기존 학년"}</option>}
+                {gradeOptions.map(option=><option key={option} value={option}>{option}</option>)}
+              </select></label>
+              {profile?.role==="admin" && <label>담당 교사<select required value={editStudentTeacher} onChange={e=>setEditStudentTeacher(e.target.value)}>
+                {teachers.filter(t=>t.role==="teacher" || t.id===student.teacher_id).map(t=><option key={t.id} value={t.id}>{t.full_name}</option>)}
+              </select></label>}
+            </div>
+            <div className="student-manage-buttons"><button type="submit" className="primary" disabled={busy || !editStudentName.trim()}>✓ 변경 사항 저장</button><button type="button" className="outline" disabled={busy} onClick={()=>{setEditingStudent(false);setMessage("");}}>취소</button></div>
+          </form>}
+          {deletingStudent && student && profile?.role==="admin" && <section className="student-delete-panel">
+            <h3>🗑 학생 영구 삭제</h3>
+            <p><strong>{student.full_name}</strong> 학생을 삭제하면 <strong>기도제목 {studentPrayers.length}건, 기도응답 {studentResponses.length}건, 기도한 날 {studentDays.length}건</strong>도 함께 영구 삭제됩니다. 되돌릴 수 없습니다.</p>
+            <label>삭제를 확인하려면 학생 이름을 정확히 입력해 주세요.<input type="text" value={deleteStudentName} onChange={e=>setDeleteStudentName(e.target.value)} placeholder={student.full_name} autoComplete="off"/></label>
+            <div className="student-manage-buttons"><button type="button" className="delete" disabled={busy || deleteStudentName!==student.full_name} onClick={()=>void deleteStudent()}>🗑 영구 삭제</button><button type="button" className="outline" disabled={busy} onClick={()=>{setDeletingStudent(false);setDeleteStudentName("");setMessage("");}}>취소</button></div>
+          </section>}<div className="student-banner"><div className="big-tree">{treeFor(studentPrayers.length,studentResponses.length,growthSettings)}</div><div className="student-intro"><h2>{student?.full_name}의 기도나무</h2><p>{student?.grade} · 기도의 잎사귀가 자라고 감사의 꽃이 피어요.</p><div className="growthbar"><span style={{width:`${Math.min(100,Math.round(studentPrayers.length / growthSettings.flower_min * 100))}%`}}/></div><small>🌿 기도제목 {studentPrayers.length} · 🌸 응답 {studentResponses.length} · ⭐ 기도한 날 {studentDays.length}</small></div></div>
           <div className="record-columns"><div className="records"><div className="tabs"><button className={tab==="prayers"?"active":""} onClick={()=>setTab("prayers")}>🌿 기도제목</button><button className={tab==="responses"?"active":""} onClick={()=>setTab("responses")}>🌸 응답</button><button className={tab==="days"?"active":""} onClick={()=>setTab("days")}>⭐ 기도한 날</button></div>
             {tab==="prayers" && <><form className="prayer-form" onSubmit={addPrayer}><h3>새 기도제목 기록</h3><input required value={prayerTitle} onChange={e=>setPrayerTitle(e.target.value)} placeholder="기도제목"/><textarea value={prayerBody} onChange={e=>setPrayerBody(e.target.value)} placeholder="함께 기도할 내용을 적어 주세요."/><button className="primary" disabled={busy}>기도제목 저장</button></form><div className="record-list">{studentPrayers.map(p=><article className="record" key={p.id}><div className="record-heading"><h4>{p.title}</h4><span className={`status ${p.status==="응답 완료"?"done":""}`}>{p.status}</span></div><p>{p.body||"기도 내용이 추가되지 않았어요."}</p><small>등록일 {new Date(p.created_at).toLocaleDateString("ko-KR")}</small><div className="record-buttons"><button className="soft" onClick={()=>{setResponsePrayer(p.id);setTab("responses");}}>🌸 응답 기록</button><button className="outline" onClick={()=>togglePrayer(p)}>{p.status==="응답 완료"?"진행 중으로":"응답 완료로"}</button>{profile?.role==="admin"&&<button className="delete" onClick={()=>deletePrayer(p.id)}>삭제</button>}</div></article>)}{studentPrayers.length===0&&<div className="empty">첫 기도제목을 기록해 보세요 🌱</div>}</div></>}
             {tab==="responses" && <><form className="prayer-form" onSubmit={addResponse}><h3>기도응답과 감사 기록</h3><label>연결된 기도제목<select required value={responsePrayer} onChange={e=>setResponsePrayer(e.target.value)}><option value="">기도제목 선택</option>{studentPrayers.map(p=><option value={p.id} key={p.id}>{p.title}</option>)}</select></label><label>응답 날짜<input type="date" required value={responseDate} onChange={e=>setResponseDate(e.target.value)}/></label><textarea required value={responseBody} onChange={e=>setResponseBody(e.target.value)} placeholder="어떤 변화와 감사가 있었나요?"/><button className="primary" disabled={busy||!studentPrayers.length}>응답 저장</button></form><div className="record-list">{studentResponses.map(r=><article className="record" key={r.id}><h4>🌸 {studentPrayers.find(p=>p.id===r.prayer_id)?.title}</h4><p>{r.body}</p><small>응답 기록일 {r.response_date}</small></article>)}{studentResponses.length===0&&<div className="empty">아직 기록된 응답이 없어요. 작은 감사도 기록해 보세요 🌷</div>}</div></>}
