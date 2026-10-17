@@ -86,9 +86,22 @@ export default function Home() {
     const queryParams = new URLSearchParams(window.location.search);
     if (hashParams.get("type") === "recovery" || queryParams.get("type") === "recovery" || queryParams.get("reset") === "1") {
       setRecoveryMode(true);
-      client.auth.getSession().then(({ data }) => {
-        if (!data.session) setMessage("재설정 링크를 확인할 수 없습니다. 이메일의 링크가 만료되었을 수 있습니다. 새 재설정 이메일을 요청해 주세요.");
-      });
+      const accessToken = hashParams.get("access_token");
+      const refreshToken = hashParams.get("refresh_token");
+      const restoreSession = async () => {
+        if (accessToken && refreshToken) {
+          const { error } = await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+          if (error) {
+            setMessage("인증 링크를 확인할 수 없습니다. 새 비밀번호 재설정 이메일을 요청해 주세요.");
+            return;
+          }
+          // Remove sensitive tokens from the address bar after a successful exchange.
+          window.history.replaceState({}, "", window.location.pathname + "?reset=1");
+        }
+        const { data } = await client.auth.getSession();
+        if (!data.session) setMessage("인증 세션이 없습니다. 새 비밀번호 재설정 이메일을 요청해 주세요.");
+      };
+      void restoreSession();
     }
     return () => listener.subscription.unsubscribe();
   }, [client]);
@@ -119,6 +132,8 @@ export default function Home() {
   async function saveNewPassword(e: FormEvent) {
     e.preventDefault();
     if (!client) return;
+    const { data: currentAuth } = await client.auth.getSession();
+    if (!currentAuth.session) { setMessage("인증 세션이 없습니다. 새 재설정 링크를 요청해 주세요."); return; }
     if (newPassword.length < 8) { setMessage("비밀번호는 8자 이상 입력해 주세요."); return; }
     if (newPassword !== confirmPassword) { setMessage("새 비밀번호가 서로 일치하지 않습니다."); return; }
     setBusy(true); setMessage("");
