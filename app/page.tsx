@@ -26,6 +26,7 @@ export default function Home() {
   const [selectedStudent, setSelectedStudent] = useState<string>("");
   const [tab, setTab] = useState<"prayers"|"responses"|"days">("prayers");
   const [busy, setBusy] = useState(false);
+  const [recoveryReady, setRecoveryReady] = useState(false);
   const [message, setMessage] = useState("");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -70,40 +71,47 @@ export default function Home() {
 
   useEffect(() => {
     if (!client) return;
-    client.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      if (data.session?.user) loadAll(data.session.user.id);
-    });
+    let active = true;
     const { data: listener } = client.auth.onAuthStateChange((event, next) => {
+      if (!active) return;
       if (event === "PASSWORD_RECOVERY") setRecoveryMode(true);
       setSession(next);
-      if (next?.user) setTimeout(() => loadAll(next.user.id), 0);
+      if (next?.user) setTimeout(() => { if (active) void loadAll(next.user.id); }, 0);
       else { setProfile(null); setTeachers([]); setStudents([]); setPrayers([]); setResponses([]); setDays([]); }
     });
-    // Supabase may process the recovery URL before React subscribes to PASSWORD_RECOVERY.
-    // Detect the recovery marker in the URL as a fallback so the password form still appears.
-    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-    const queryParams = new URLSearchParams(window.location.search);
-    if (hashParams.get("type") === "recovery" || queryParams.get("type") === "recovery" || queryParams.get("reset") === "1") {
-      setRecoveryMode(true);
-      const accessToken = hashParams.get("access_token");
-      const refreshToken = hashParams.get("refresh_token");
-      const restoreSession = async () => {
-        if (accessToken && refreshToken) {
-          const { error } = await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
-          if (error) {
-            setMessage("인증 링크를 확인할 수 없습니다. 새 비밀번호 재설정 이메일을 요청해 주세요.");
-            return;
-          }
-          // Remove sensitive tokens from the address bar after a successful exchange.
-          window.history.replaceState({}, "", window.location.pathname + "?reset=1");
+
+    const initializeAuth = async () => {
+      const hash = new URLSearchParams(window.location.hash.slice(1));
+      const query = new URLSearchParams(window.location.search);
+      const isRecovery = hash.get("type") === "recovery" || query.get("type") === "recovery" || query.get("reset") === "1";
+      if (isRecovery) { setRecoveryMode(true); setRecoveryReady(false); }
+
+      // Supabase's redirect may contain an implicit-flow recovery session.
+      // Restore it before allowing password updates, even if the auth listener
+      // did not receive PASSWORD_RECOVERY.
+      const accessToken = hash.get("access_token");
+      const refreshToken = hash.get("refresh_token");
+      if (isRecovery && accessToken && refreshToken) {
+        const { error } = await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+        if (!active) return;
+        if (error) {
+          setMessage("재설정 링크 인증에 실패했습니다. 새로운 링크를 요청해 주세요.");
+          return;
         }
-        const { data } = await client.auth.getSession();
-        if (!data.session) setMessage("인증 세션이 없습니다. 새 비밀번호 재설정 이메일을 요청해 주세요.");
-      };
-      void restoreSession();
-    }
-    return () => listener.subscription.unsubscribe();
+        window.history.replaceState({}, "", window.location.pathname + "?reset=1");
+      }
+      const { data, error } = await client.auth.getSession();
+      if (!active) return;
+      setSession(data.session);
+      if (isRecovery && data.session && !error) setRecoveryReady(true);
+      if (isRecovery && (error || !data.session)) {
+        setMessage("재설정 인증 세션이 없습니다. 새 링크를 요청해 주세요.");
+      } else if (data.session?.user) {
+        void loadAll(data.session.user.id);
+      }
+    };
+    void initializeAuth();
+    return () => { active = false; listener.subscription.unsubscribe(); };
   }, [client]);
 
   const visibleStudents = useMemo(() => students.filter(s => profile?.role === "admin" ? s.teacher_id === selectedTeacher : s.teacher_id === profile?.id), [students, profile, selectedTeacher]);
@@ -132,6 +140,7 @@ export default function Home() {
   async function saveNewPassword(e: FormEvent) {
     e.preventDefault();
     if (!client) return;
+    if (!recoveryReady) { setMessage("인증 확인 중이거나 재설정 세션이 없습니다. 새 링크로 다시 시도해 주세요."); return; }
     const { data: currentAuth } = await client.auth.getSession();
     if (!currentAuth.session) { setMessage("인증 세션이 없습니다. 새 재설정 링크를 요청해 주세요."); return; }
     if (newPassword.length < 8) { setMessage("비밀번호는 8자 이상 입력해 주세요."); return; }
@@ -193,7 +202,7 @@ export default function Home() {
 
   if (!ready) return <main className="setup"><div className="brandmark">🌳</div><h1>기도나무를 연결해 주세요</h1><p>실제 로그인과 온라인 저장 기능을 사용하려면 Supabase 프로젝트 설정이 필요합니다.</p><ol><li>Supabase 프로젝트를 만들고 <code>supabase/schema.sql</code>을 SQL Editor에서 실행하세요.</li><li><code>.env.local</code> 파일에 프로젝트 URL과 anon/publishable key를 입력하세요.</li><li>관리자 계정은 SQL 안내에 따라 역할을 부여하세요.</li></ol><p>설정 안내는 ZIP 안의 README.md에 있습니다.</p></main>;
 
-  if (recoveryMode) return <main className="login-wrap"><div className="login-card"><div className="brandmark">🌳</div><h1>새 비밀번호 설정</h1><p className="muted">새 비밀번호를 입력해 주세요.</p><form onSubmit={saveNewPassword}><label>새 비밀번호<input type="password" required minLength={8} autoComplete="new-password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="8자 이상"/></label><label>새 비밀번호 확인<input type="password" required minLength={8} autoComplete="new-password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="비밀번호 다시 입력"/></label><button className="primary" disabled={busy}>{busy?"변경 중…":"비밀번호 변경"}</button></form>{message && <p className="notice" role="status">{message}</p>}</div></main>;
+  if (recoveryMode) return <main className="login-wrap"><div className="login-card"><div className="brandmark">🌳</div><h1>새 비밀번호 설정</h1><p className="muted">새 비밀번호를 입력해 주세요.</p><form onSubmit={saveNewPassword}><label>새 비밀번호<input type="password" required minLength={8} autoComplete="new-password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="8자 이상"/></label><label>새 비밀번호 확인<input type="password" required minLength={8} autoComplete="new-password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="비밀번호 다시 입력"/></label><button className="primary" disabled={busy || !recoveryReady}>{busy?"변경 중…":recoveryReady?"비밀번호 변경":"인증 확인 중…"}</button></form>{message && <p className="notice" role="status">{message}</p>}</div></main>;
 
   if (!session) return <main className="login-wrap"><div className="login-card"><div className="brandmark">🌳</div><h1>기도나무</h1><p className="muted">우리의 기도가 열매 맺어요</p><form onSubmit={signIn}><label>이메일<input type="email" required value={loginEmail} onChange={e=>setLoginEmail(e.target.value)} placeholder="teacher@church.org"/></label><label>비밀번호<input type="password" required value={loginPassword} onChange={e=>setLoginPassword(e.target.value)} placeholder="비밀번호"/></label><button className="primary" disabled={busy}>{busy?"확인 중…":"로그인"}</button></form><form onSubmit={requestPasswordReset} className="mini-form"><button type="submit" className="outline full" disabled={busy || !loginEmail.trim()}>비밀번호를 잊으셨나요? 재설정 이메일 받기</button><p className="fine">위 이메일 칸에 계정 이메일을 먼저 입력해 주세요.</p></form>{message && <p className="notice" role="status">{message}</p>}<p className="fine">교회 관리자에게 계정 발급을 요청해 주세요.</p></div></main>;
 
