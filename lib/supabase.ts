@@ -5,7 +5,8 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 // Pinning it here avoids an old NEXT_PUBLIC_SUPABASE_URL getting baked into
 // a cached browser bundle during deployments.
 const url = "https://ovpupevdhtjbtsiynmku.supabase.co";
-const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+// Dedicated environment variable to avoid collisions with old Vercel/Supabase integrations.
+const key = process.env.NEXT_PUBLIC_PRAYER_TREE_KEY;
 
 // One browser client for the entire application. Multiple clients can race
 // to consume an email-link callback or overwrite the stored auth session.
