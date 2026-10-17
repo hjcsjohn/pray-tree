@@ -16,6 +16,7 @@ export default function Home() {
   const ready = supabaseReady();
   const [client] = useState(() => ready ? supabaseBrowser() : null);
   const [session, setSession] = useState<any>(null);
+  const [authChecking, setAuthChecking] = useState(true);
   const [profile, setProfile] = useState<Teacher | null>(null);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
@@ -72,45 +73,55 @@ export default function Home() {
   useEffect(() => {
     if (!client) return;
     let active = true;
-    const { data: listener } = client.auth.onAuthStateChange((event, next) => {
+    let lastLoadedUser = "";
+
+    // Supabase itself consumes the email-link callback and persists the session.
+    // Do not call setSession() with URL tokens: doing so races its initialization.
+    const query = new URLSearchParams(window.location.search);
+    const hash = new URLSearchParams(window.location.hash.slice(1));
+    const isRecovery = query.get("reset") === "1" || query.get("type") === "recovery" || hash.get("type") === "recovery";
+    if (isRecovery) setRecoveryMode(true);
+
+    const linkError = hash.get("error_description") || query.get("error_description");
+    if (linkError) setMessage("이메일 링크가 만료되었거나 유효하지 않습니다. 새 링크를 요청해 주세요.");
+
+    const applySession = (next: any, event?: string) => {
       if (!active) return;
-      if (event === "PASSWORD_RECOVERY") setRecoveryMode(true);
       setSession(next);
-      if (next?.user) setTimeout(() => { if (active) void loadAll(next.user.id); }, 0);
-      else { setProfile(null); setTeachers([]); setStudents([]); setPrayers([]); setResponses([]); setDays([]); }
-    });
-
-    const initializeAuth = async () => {
-      const hash = new URLSearchParams(window.location.hash.slice(1));
-      const query = new URLSearchParams(window.location.search);
-      const isRecovery = hash.get("type") === "recovery" || query.get("type") === "recovery" || query.get("reset") === "1";
-      if (isRecovery) { setRecoveryMode(true); setRecoveryReady(false); }
-
-      // Supabase's redirect may contain an implicit-flow recovery session.
-      // Restore it before allowing password updates, even if the auth listener
-      // did not receive PASSWORD_RECOVERY.
-      const accessToken = hash.get("access_token");
-      const refreshToken = hash.get("refresh_token");
-      if (accessToken && refreshToken) {
-        const { error } = await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
-        if (!active) return;
-        if (error) {
-          setMessage("이메일 로그인 링크 인증에 실패했습니다. 새 링크를 요청해 주세요.");
-          return;
+      setAuthChecking(false);
+      if (event === "PASSWORD_RECOVERY") setRecoveryMode(true);
+      if (next?.user) {
+        if (isRecovery) setRecoveryReady(true);
+        if (lastLoadedUser !== next.user.id) {
+          lastLoadedUser = next.user.id;
+          // Supabase advises against awaiting other Supabase calls inside auth callbacks.
+          setTimeout(() => { if (active) void loadAll(next.user.id); }, 0);
         }
-        window.history.replaceState({}, "", window.location.pathname + (isRecovery ? "?reset=1" : ""));
-      }
-      const { data, error } = await client.auth.getSession();
-      if (!active) return;
-      setSession(data.session);
-      if (isRecovery && data.session && !error) setRecoveryReady(true);
-      if (isRecovery && (error || !data.session)) {
-        setMessage("재설정 인증 세션이 없습니다. 새 링크를 요청해 주세요.");
-      } else if (data.session?.user) {
-        void loadAll(data.session.user.id);
+      } else {
+        lastLoadedUser = "";
+        setProfile(null); setTeachers([]); setStudents([]);
+        setPrayers([]); setResponses([]); setDays([]);
       }
     };
-    void initializeAuth();
+
+    const { data: listener } = client.auth.onAuthStateChange((event, next) => {
+      applySession(next, event);
+    });
+
+    // INITIAL_SESSION is emitted after Supabase finishes parsing redirect URLs.
+    // getSession is a fallback for environments where the event was missed.
+    void client.auth.getSession().then(({ data, error }) => {
+      if (!active) return;
+      if (error) {
+        setMessage("로그인 상태 확인에 실패했습니다. 새로고침 후 다시 시도해 주세요.");
+      } else {
+        applySession(data.session);
+        if (isRecovery && !data.session) {
+          setMessage("재설정 인증 세션이 없습니다. 새 링크를 요청해 주세요.");
+        }
+      }
+    });
+
     return () => { active = false; listener.subscription.unsubscribe(); };
   }, [client]);
 
@@ -124,8 +135,11 @@ export default function Home() {
   async function signIn(e: FormEvent) {
     e.preventDefault(); if (!client) return;
     setBusy(true); setMessage("");
-    const { error } = await client.auth.signInWithPassword({ email: loginEmail, password: loginPassword });
-    setBusy(false); setMessage(error ? error.message : "로그인되었습니다.");
+    const { data, error } = await client.auth.signInWithPassword({ email: loginEmail.trim(), password: loginPassword });
+    setBusy(false);
+    if (error) setMessage("로그인 실패: " + error.message);
+    else if (!data.session) setMessage("인증은 처리됐지만 세션이 생성되지 않았습니다.");
+    else { setSession(data.session); setMessage(""); }
   }
   async function requestPasswordReset(e: FormEvent) {
     e.preventDefault();
@@ -203,6 +217,8 @@ export default function Home() {
   if (!ready) return <main className="setup"><div className="brandmark">🌳</div><h1>기도나무를 연결해 주세요</h1><p>실제 로그인과 온라인 저장 기능을 사용하려면 Supabase 프로젝트 설정이 필요합니다.</p><ol><li>Supabase 프로젝트를 만들고 <code>supabase/schema.sql</code>을 SQL Editor에서 실행하세요.</li><li><code>.env.local</code> 파일에 프로젝트 URL과 anon/publishable key를 입력하세요.</li><li>관리자 계정은 SQL 안내에 따라 역할을 부여하세요.</li></ol><p>설정 안내는 ZIP 안의 README.md에 있습니다.</p></main>;
 
   if (recoveryMode) return <main className="login-wrap"><div className="login-card"><div className="brandmark">🌳</div><h1>새 비밀번호 설정</h1><p className="muted">새 비밀번호를 입력해 주세요.</p><form onSubmit={saveNewPassword}><label>새 비밀번호<input type="password" required minLength={8} autoComplete="new-password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="8자 이상"/></label><label>새 비밀번호 확인<input type="password" required minLength={8} autoComplete="new-password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="비밀번호 다시 입력"/></label><button className="primary" disabled={busy || !recoveryReady}>{busy?"변경 중…":recoveryReady?"비밀번호 변경":"인증 확인 중…"}</button></form>{message && <p className="notice" role="status">{message}</p>}</div></main>;
+
+  if (authChecking) return <main className="login-wrap"><div className="login-card"><h1>🌳 기도나무</h1><p>로그인 상태를 확인하고 있습니다…</p></div></main>;
 
   if (!session) return <main className="login-wrap"><div className="login-card"><div className="brandmark">🌳</div><h1>기도나무</h1><p className="muted">우리의 기도가 열매 맺어요</p><form onSubmit={signIn}><label>이메일<input type="email" required value={loginEmail} onChange={e=>setLoginEmail(e.target.value)} placeholder="teacher@church.org"/></label><label>비밀번호<input type="password" required value={loginPassword} onChange={e=>setLoginPassword(e.target.value)} placeholder="비밀번호"/></label><button className="primary" disabled={busy}>{busy?"확인 중…":"로그인"}</button></form><form onSubmit={requestPasswordReset} className="mini-form"><button type="submit" className="outline full" disabled={busy || !loginEmail.trim()}>비밀번호를 잊으셨나요? 재설정 이메일 받기</button><p className="fine">위 이메일 칸에 계정 이메일을 먼저 입력해 주세요.</p></form>{message && <p className="notice" role="status">{message}</p>}<p className="fine">교회 관리자에게 계정 발급을 요청해 주세요.</p></div></main>;
 
