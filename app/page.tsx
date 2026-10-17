@@ -91,14 +91,14 @@ export default function Home() {
       // did not receive PASSWORD_RECOVERY.
       const accessToken = hash.get("access_token");
       const refreshToken = hash.get("refresh_token");
-      if (isRecovery && accessToken && refreshToken) {
+      if (accessToken && refreshToken) {
         const { error } = await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
         if (!active) return;
         if (error) {
-          setMessage("재설정 링크 인증에 실패했습니다. 새로운 링크를 요청해 주세요.");
+          setMessage("이메일 로그인 링크 인증에 실패했습니다. 새 링크를 요청해 주세요.");
           return;
         }
-        window.history.replaceState({}, "", window.location.pathname + "?reset=1");
+        window.history.replaceState({}, "", window.location.pathname + (isRecovery ? "?reset=1" : ""));
       }
       const { data, error } = await client.auth.getSession();
       if (!active) return;
